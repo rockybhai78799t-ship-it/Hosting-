@@ -1,0 +1,18 @@
+# render.yaml
+services:
+  - type: web
+    name: hosting-bot
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      python3 -c "import nltk; nltk.download('punkt')" || true
+    startCommand: |
+      python3 bot.py
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        value: "7957702848:AAG8deFAc_T9qhSztPuxq5Lp8IM6XUxe4fo"
+      - key: OWNER_ID
+        value: "6031637959"
+      - key: PYTHON_VERSION
+        value: "3.11.0"
