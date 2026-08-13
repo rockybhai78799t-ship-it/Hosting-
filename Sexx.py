@@ -28,7 +28,7 @@ import socket
 print("🐍 Starting Bot...")
 
 # --- Configuration from ENV ---
-TOKEN = '8965299977:AAEBvjzDcbUP9QTgf0EcCLzT3DVu_hqHPWg'
+TOKEN = '8755893416:AAHCHTDuy-eriXx9Y9booaSupBQWnKCSKtg'
 OWNER_ID = 8562486480
 ADMIN_ID = 8562486480
 YOUR_USERNAME = '@YOUR_USERNAME'
