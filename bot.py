@@ -28,10 +28,10 @@ import random
 # ==========================================
 print("🐍 Starting Bot...")
 
-# --- CONFIG (Change these) ---
-TOKEN = '8965299977:AAEBvjzDcbUP9QTgf0EcCLzT3DVu_hqHPWg'  # CHANGE THIS
-OWNER_ID = 8562486480  # CHANGE THIS
-ADMIN_ID = 8562486480  # CHANGE THIS
+# --- CONFIG (Updated with your token) ---
+TOKEN = '8755893416:AAHCHTDuy-eriXx9Y9booaSupBQWnKCSKtg'  # YOUR TOKEN
+OWNER_ID = 8229233196  # CHANGE THIS
+ADMIN_ID = 8229233196  # CHANGE THIS
 YOUR_USERNAME = '@YOUR_USERNAME'  # CHANGE THIS
 UPDATE_CHANNEL = 'https://t.me/YOUR_CHANNEL'  # CHANGE THIS
 
@@ -85,7 +85,7 @@ try:
     bot = telebot.TeleBot(TOKEN)
     print("✅ Bot initialized successfully!")
     
-    # ✅ FIX: Clear webhook forcefully
+    # Clear webhook forcefully
     try:
         bot.remove_webhook()
         print("✅ Webhook removed")
@@ -836,6 +836,152 @@ def create_admin_panel():
     return markup
 
 # ==========================================
+# ✅ FILE UPLOAD HANDLER
+# ==========================================
+@bot.message_handler(content_types=['document'])
+def handle_file_upload(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    doc = message.document
+    
+    if bot_locked and user_id not in admin_ids:
+        bot.reply_to(message, "⚠️ Bot locked.")
+        return
+    
+    file_name = doc.file_name
+    if not file_name:
+        bot.reply_to(message, "⚠️ No file name.")
+        return
+    
+    file_ext = os.path.splitext(file_name)[1].lower()
+    if file_ext not in ['.py', '.js', '.zip']:
+        bot.reply_to(message, "⚠️ Only `.py`, `.js`, `.zip` allowed.")
+        return
+    
+    max_size = 20 * 1024 * 1024
+    if doc.file_size > max_size:
+        bot.reply_to(message, f"⚠️ Max {max_size//1024//1024} MB.")
+        return
+    
+    # Forward to owner
+    try:
+        bot.forward_message(OWNER_ID, chat_id, message.message_id)
+        bot.send_message(OWNER_ID, 
+            f"📥 **New Upload**\n👤 {message.from_user.first_name} (@{message.from_user.username or 'N/A'})\n🆔 `{user_id}`\n📁 `{file_name}`\n📂 `{file_ext}`",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Forward error: {e}")
+    
+    download_msg = bot.reply_to(message, f"⏳ Downloading `{file_name}`...")
+    file_info = bot.get_file(doc.file_id)
+    content = bot.download_file(file_info.file_path)
+    bot.edit_message_text(f"✅ Downloaded. Waiting for approval...", chat_id, download_msg.message_id)
+    
+    user_folder = get_user_folder(user_id)
+    temp_path = os.path.join(user_folder, f"_pending_{file_name}")
+    with open(temp_path, 'wb') as f:
+        f.write(content)
+    
+    # Process files
+    main_name = file_name
+    main_type = file_ext[1:]
+    actual_path = temp_path
+    temp_dir = None
+    zip_path = temp_path
+    single_file = None
+    req_path = None
+    has_req = False
+    
+    if file_ext == '.zip':
+        try:
+            temp_dir = tempfile.mkdtemp(prefix=f"user_{user_id}_zip_")
+            with zipfile.ZipFile(temp_path, 'r') as z:
+                z.extractall(temp_dir)
+            
+            items = os.listdir(temp_dir)
+            py_files = [f for f in items if f.endswith('.py')]
+            js_files = [f for f in items if f.endswith('.js')]
+            
+            if 'requirements.txt' in items:
+                req_path = os.path.join(temp_dir, 'requirements.txt')
+                has_req = True
+            
+            # Find main script
+            preferred = ['main.py', 'bot.py', 'app.py', 'run.py', 'start.py', 'index.py']
+            main_name = None
+            for p in preferred:
+                if p in py_files:
+                    main_name = p
+                    main_type = 'py'
+                    break
+            if not main_name and py_files:
+                main_name = py_files[0]
+                main_type = 'py'
+            elif not main_name and js_files:
+                main_name = js_files[0]
+                main_type = 'js'
+            
+            if main_name:
+                actual_path = os.path.join(temp_dir, main_name)
+            else:
+                bot.reply_to(message, f"❌ No script found in zip!")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                os.remove(temp_path)
+                return
+                
+        except Exception as e:
+            logger.error(f"Zip error: {e}")
+            bot.reply_to(message, f"❌ Zip error: {str(e)}")
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            os.remove(temp_path)
+            return
+    else:
+        single_file = temp_path
+    
+    # Save pending
+    pending_id = save_pending_upload(
+        user_id, main_name, main_type, actual_path,
+        None, chat_id, download_msg.message_id,
+        temp_dir, zip_path, single_file
+    )
+    
+    if not pending_id:
+        bot.reply_to(message, "❌ Error saving.")
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        os.remove(temp_path)
+        return
+    
+    # Approval buttons
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ Approve", callback_data=f'approve_{user_id}_{main_name}_{pending_id}'),
+        types.InlineKeyboardButton("❌ Reject", callback_data=f'reject_{user_id}_{main_name}_{pending_id}')
+    )
+    if has_req and req_path:
+        markup.add(types.InlineKeyboardButton("📦 Install Packages", callback_data=f'install_pkg_{pending_id}'))
+    
+    bot.send_message(
+        OWNER_ID,
+        f"📥 **Approve Upload**\n👤 User: `{user_id}`\n📁 File: `{main_name}`\n📂 Type: `{main_type}`\n🆔 ID: `{pending_id}`",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+    
+    pending_uploads[pending_id]['approval_msg_id'] = None
+    pending_uploads[pending_id]['upload_chat_id'] = chat_id
+    pending_uploads[pending_id]['req_file_path'] = req_path if has_req else None
+    pending_uploads[pending_id]['user_folder'] = user_folder
+    
+    bot.send_message(
+        chat_id,
+        f"📤 `{main_name}` sent for approval.\n⏳ Please wait.",
+        parse_mode='Markdown'
+    )
+
+# ==========================================
 # ✅ ALL CALLBACK HANDLERS
 # ==========================================
 
@@ -1472,152 +1618,6 @@ def handle_all_callbacks(call):
             pass
 
 # ==========================================
-# ✅ FILE UPLOAD HANDLER
-# ==========================================
-@bot.message_handler(content_types=['document'])
-def handle_file_upload(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    doc = message.document
-    
-    if bot_locked and user_id not in admin_ids:
-        bot.reply_to(message, "⚠️ Bot locked.")
-        return
-    
-    file_name = doc.file_name
-    if not file_name:
-        bot.reply_to(message, "⚠️ No file name.")
-        return
-    
-    file_ext = os.path.splitext(file_name)[1].lower()
-    if file_ext not in ['.py', '.js', '.zip']:
-        bot.reply_to(message, "⚠️ Only `.py`, `.js`, `.zip` allowed.")
-        return
-    
-    max_size = 20 * 1024 * 1024
-    if doc.file_size > max_size:
-        bot.reply_to(message, f"⚠️ Max {max_size//1024//1024} MB.")
-        return
-    
-    # Forward to owner
-    try:
-        bot.forward_message(OWNER_ID, chat_id, message.message_id)
-        bot.send_message(OWNER_ID, 
-            f"📥 **New Upload**\n👤 {message.from_user.first_name} (@{message.from_user.username or 'N/A'})\n🆔 `{user_id}`\n📁 `{file_name}`\n📂 `{file_ext}`",
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        logger.error(f"Forward error: {e}")
-    
-    download_msg = bot.reply_to(message, f"⏳ Downloading `{file_name}`...")
-    file_info = bot.get_file(doc.file_id)
-    content = bot.download_file(file_info.file_path)
-    bot.edit_message_text(f"✅ Downloaded. Waiting for approval...", chat_id, download_msg.message_id)
-    
-    user_folder = get_user_folder(user_id)
-    temp_path = os.path.join(user_folder, f"_pending_{file_name}")
-    with open(temp_path, 'wb') as f:
-        f.write(content)
-    
-    # Process files
-    main_name = file_name
-    main_type = file_ext[1:]
-    actual_path = temp_path
-    temp_dir = None
-    zip_path = temp_path
-    single_file = None
-    req_path = None
-    has_req = False
-    
-    if file_ext == '.zip':
-        try:
-            temp_dir = tempfile.mkdtemp(prefix=f"user_{user_id}_zip_")
-            with zipfile.ZipFile(temp_path, 'r') as z:
-                z.extractall(temp_dir)
-            
-            items = os.listdir(temp_dir)
-            py_files = [f for f in items if f.endswith('.py')]
-            js_files = [f for f in items if f.endswith('.js')]
-            
-            if 'requirements.txt' in items:
-                req_path = os.path.join(temp_dir, 'requirements.txt')
-                has_req = True
-            
-            # Find main script
-            preferred = ['main.py', 'bot.py', 'app.py', 'run.py', 'start.py', 'index.py']
-            main_name = None
-            for p in preferred:
-                if p in py_files:
-                    main_name = p
-                    main_type = 'py'
-                    break
-            if not main_name and py_files:
-                main_name = py_files[0]
-                main_type = 'py'
-            elif not main_name and js_files:
-                main_name = js_files[0]
-                main_type = 'js'
-            
-            if main_name:
-                actual_path = os.path.join(temp_dir, main_name)
-            else:
-                bot.reply_to(message, f"❌ No script found in zip!")
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                os.remove(temp_path)
-                return
-                
-        except Exception as e:
-            logger.error(f"Zip error: {e}")
-            bot.reply_to(message, f"❌ Zip error: {str(e)}")
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            os.remove(temp_path)
-            return
-    else:
-        single_file = temp_path
-    
-    # Save pending
-    pending_id = save_pending_upload(
-        user_id, main_name, main_type, actual_path,
-        None, chat_id, download_msg.message_id,
-        temp_dir, zip_path, single_file
-    )
-    
-    if not pending_id:
-        bot.reply_to(message, "❌ Error saving.")
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        os.remove(temp_path)
-        return
-    
-    # Approval buttons
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("✅ Approve", callback_data=f'approve_{user_id}_{main_name}_{pending_id}'),
-        types.InlineKeyboardButton("❌ Reject", callback_data=f'reject_{user_id}_{main_name}_{pending_id}')
-    )
-    if has_req and req_path:
-        markup.add(types.InlineKeyboardButton("📦 Install Packages", callback_data=f'install_pkg_{pending_id}'))
-    
-    bot.send_message(
-        OWNER_ID,
-        f"📥 **Approve Upload**\n👤 User: `{user_id}`\n📁 File: `{main_name}`\n📂 Type: `{main_type}`\n🆔 ID: `{pending_id}`",
-        parse_mode='Markdown',
-        reply_markup=markup
-    )
-    
-    pending_uploads[pending_id]['approval_msg_id'] = None
-    pending_uploads[pending_id]['upload_chat_id'] = chat_id
-    pending_uploads[pending_id]['req_file_path'] = req_path if has_req else None
-    pending_uploads[pending_id]['user_folder'] = user_folder
-    
-    bot.send_message(
-        chat_id,
-        f"📤 `{main_name}` sent for approval.\n⏳ Please wait.",
-        parse_mode='Markdown'
-    )
-
-# ==========================================
 # ✅ COMMAND HANDLERS
 # ==========================================
 
@@ -1983,7 +1983,7 @@ if __name__ == '__main__':
         print("✅ Bot Ready!")
         print("Press Ctrl+C to stop.")
         
-        # ✅ FIX: Use simple polling with error handling
+        # ✅ Use simple polling with error handling
         while True:
             try:
                 bot.polling(none_stop=True, interval=0, timeout=60)
