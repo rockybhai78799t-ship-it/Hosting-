@@ -562,6 +562,14 @@ def run_js_script(script_path, script_owner_id, user_folder, file_name, message_
             del bot_scripts[script_key]
 
 # ==========================================
+# ✅ LOCK/UNLOCK FUNCTIONS
+# ==========================================
+
+def set_bot_locked(value):
+    global bot_locked
+    bot_locked = value
+
+# ==========================================
 # ✅ FILE UPLOAD HANDLER
 # ==========================================
 @bot.message_handler(content_types=['document'])
@@ -1111,8 +1119,7 @@ def handle_all_callbacks(call):
             if user_id not in admin_ids:
                 bot.answer_callback_query(call.id, "⚠️ Admin only.", show_alert=True)
                 return
-            global bot_locked
-            bot_locked = True
+            set_bot_locked(True)
             bot.answer_callback_query(call.id, "🔒 Locked.")
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_main_menu_inline(user_id))
         
@@ -1120,8 +1127,7 @@ def handle_all_callbacks(call):
             if user_id not in admin_ids:
                 bot.answer_callback_query(call.id, "⚠️ Admin only.", show_alert=True)
                 return
-            global bot_locked
-            bot_locked = False
+            set_bot_locked(False)
             bot.answer_callback_query(call.id, "🔓 Unlocked.")
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_main_menu_inline(user_id))
         
@@ -1394,8 +1400,7 @@ def reply_lock(m):
     if m.from_user.id not in admin_ids:
         bot.reply_to(m, "⚠️ Admin only.")
         return
-    global bot_locked
-    bot_locked = True
+    set_bot_locked(True)
     bot.reply_to(m, "🔒 Locked.")
 
 @bot.message_handler(func=lambda m: m.text == '🟢 Run All')
